@@ -15,16 +15,10 @@ app.get('/', (req, res) => {
   res.json({ status: 'RantLogic backend running' });
 });
 
-// Build plist from shortcut data
 function buildPlist(shortcutName, actions) {
   const actionXml = actions.map(action => {
     const params = Object.entries(action.parameters || {})
-      .map(([k, v]) => {
-        if (typeof v === 'object') {
-          return `<key>${k}</key><string>${JSON.stringify(v)}</string>`;
-        }
-        return `<key>${k}</key><string>${v}</string>`;
-      })
+      .map(([k, v]) => `<key>${k}</key><string>${v}</string>`)
       .join('');
     return `
         <dict>
@@ -58,69 +52,67 @@ function buildPlist(shortcutName, actions) {
 </plist>`;
 }
 
-// Verified iOS Shortcuts action identifiers with correct parameter names
 const PROMPT = (rant) => `You are RantLogic, an AI that converts user frustrations into working iOS Shortcuts automations.
 
 The user said: "${rant}"
 
 You MUST respond ONLY with a valid JSON object. No other text, no markdown, no explanation.
 
-CRITICAL: Only use action identifiers and parameter names from this verified list:
+CRITICAL RULES:
+1. Only use action identifiers from the verified list below
+2. Use EXACT parameter names as shown — wrong parameter names cause "Unknown Action" errors
+3. For ETA/travel shortcuts: always include a real destination address in WFGetDirectionsActionDestination
+4. For message shortcuts: include a real message in WFMessageContent
+5. Build 2-4 actions maximum
 
-MESSAGING:
-- identifier: "is.workflow.actions.sendmessage"
-  parameters: { "WFSendMessageActionRecipients": "contact name or number", "WFMessageContent": "message text" }
+VERIFIED ACTIONS:
 
-LOCATION:
-- identifier: "is.workflow.actions.getcurrentlocation"
-  parameters: {}
-- identifier: "is.workflow.actions.gettraveltime"
-  parameters: { "WFGetDirectionsActionDestination": "destination address", "WFGetDirectionsActionMode": "Driving" }
+GET CURRENT LOCATION:
+{ "identifier": "is.workflow.actions.getcurrentlocation", "parameters": {} }
 
-REMINDERS:
-- identifier: "is.workflow.actions.addnewreminder"
-  parameters: { "WFRemindMeTitleKey": "reminder text", "WFRemindMeDate": "time string" }
+GET TRAVEL TIME (MUST include destination):
+{ "identifier": "is.workflow.actions.gettraveltime", "parameters": { "WFGetDirectionsActionDestination": "123 Main St, New York, NY", "WFGetDirectionsActionMode": "Driving" } }
 
-ALARMS:
-- identifier: "is.workflow.actions.setalarm"  
-  parameters: { "WFAlarmHour": "7", "WFAlarmMinute": "0", "WFAlarmLabel": "alarm name" }
+SEND MESSAGE:
+{ "identifier": "is.workflow.actions.sendmessage", "parameters": { "WFSendMessageActionRecipients": "Wife", "WFMessageContent": "On my way! ETA is about 20 minutes." } }
 
-FOCUS / DO NOT DISTURB:
-- identifier: "is.workflow.actions.setfocus"
-  parameters: { "WFFocusMode": "Do Not Disturb", "WFSetFocusEnabled": "1" }
+ADD REMINDER:
+{ "identifier": "is.workflow.actions.addnewreminder", "parameters": { "WFRemindMeTitleKey": "Charge your phone", "WFRemindMeDate": "10:00 PM" } }
 
-SHOW RESULT / NOTIFICATION:
-- identifier: "is.workflow.actions.showresult"
-  parameters: { "Text": "message to show" }
+SET ALARM:
+{ "identifier": "is.workflow.actions.setalarm", "parameters": { "WFAlarmHour": "7", "WFAlarmMinute": "0", "WFAlarmLabel": "Wake up" } }
 
-OPEN APP:
-- identifier: "is.workflow.actions.openapp"
-  parameters: { "WFAppIdentifier": "com.apple.mobilenotes" }
+SET FOCUS MODE:
+{ "identifier": "is.workflow.actions.setfocus", "parameters": { "WFFocusMode": "Do Not Disturb", "WFSetFocusEnabled": "1" } }
 
-WAIT / TIMER:
-- identifier: "is.workflow.actions.delay"
-  parameters: { "WFDelayTime": "5" }
+SHOW RESULT:
+{ "identifier": "is.workflow.actions.showresult", "parameters": { "Text": "Done!" } }
 
-DATE:
-- identifier: "is.workflow.actions.date"
-  parameters: {}
+PATTERN EXAMPLES:
 
-NOTES:
-- identifier: "is.workflow.actions.addnote"
-  parameters: { "WFNoteAppIdentifier": "com.apple.mobilenotes", "WFNoteContent": "note text" }
+For "text my wife my ETA when I leave work":
+actions: [
+  { identifier: "is.workflow.actions.getcurrentlocation", parameters: {} },
+  { identifier: "is.workflow.actions.gettraveltime", parameters: { "WFGetDirectionsActionDestination": "Home", "WFGetDirectionsActionMode": "Driving" } },
+  { identifier: "is.workflow.actions.sendmessage", parameters: { "WFSendMessageActionRecipients": "Wife", "WFMessageContent": "Leaving work now, on my way home!" } }
+]
 
-Rules:
-- Use ONLY the identifiers above, spelled exactly as shown
-- Use ONLY the parameter names shown above for each action
-- Build 2-4 actions that logically accomplish what the user wants
-- For ETA/travel shortcuts, combine getcurrentlocation + gettraveltime + sendmessage
-- For reminder shortcuts, use addnewreminder + showresult
-- For focus shortcuts, use setfocus + showresult
+For "remind me to charge my phone at night":
+actions: [
+  { identifier: "is.workflow.actions.addnewreminder", parameters: { "WFRemindMeTitleKey": "Charge your phone", "WFRemindMeDate": "10:00 PM" } },
+  { identifier: "is.workflow.actions.showresult", parameters: { "Text": "Reminder set to charge your phone at 10 PM!" } }
+]
 
-Respond with this exact JSON format:
+For "turn off focus mode when I get home":
+actions: [
+  { identifier: "is.workflow.actions.setfocus", parameters: { "WFFocusMode": "Do Not Disturb", "WFSetFocusEnabled": "0" } },
+  { identifier: "is.workflow.actions.showresult", parameters: { "Text": "Focus mode turned off. Welcome home!" } }
+]
+
+Respond with ONLY this JSON:
 {
   "summary": "One sentence describing what this shortcut does",
-  "shortcut_name": "Short 2-3 word name",
+  "shortcut_name": "Short 2-3 word name, no numbers or special characters",
   "actions": [
     {
       "identifier": "is.workflow.actions.showresult",
@@ -167,11 +159,18 @@ app.post('/sign', async (req, res) => {
   if (!rant) return res.status(400).json({ error: 'No rant provided' });
   try {
     const shortcutData = await callClaude(rant);
-    const plist = buildPlist(shortcutData.shortcut_name, shortcutData.actions);
+
+    // Clean the shortcut name — no numbers, no special chars
+    const cleanName = shortcutData.shortcut_name
+      .replace(/[^a-zA-Z0-9 ]/g, '')
+      .trim();
+    shortcutData.shortcut_name = cleanName;
+
+    const plist = buildPlist(cleanName, shortcutData.actions);
 
     const form = new FormData();
     form.append('shortcut', Buffer.from(plist), {
-      filename: shortcutData.shortcut_name + '.shortcut',
+      filename: cleanName + '.shortcut',
       contentType: 'application/octet-stream'
     });
 
@@ -186,8 +185,8 @@ app.post('/sign', async (req, res) => {
     );
 
     res.setHeader('Content-Type', 'application/octet-stream');
-    res.setHeader('Content-Disposition', 'attachment; filename="' + shortcutData.shortcut_name + '.shortcut"');
-    res.setHeader('X-Shortcut-Name', shortcutData.shortcut_name);
+    res.setHeader('Content-Disposition', 'attachment; filename="' + cleanName + '.shortcut"');
+    res.setHeader('X-Shortcut-Name', cleanName);
     res.setHeader('X-Shortcut-Summary', shortcutData.summary);
     res.send(Buffer.from(signerResponse.data));
 
